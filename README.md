@@ -13,3 +13,14 @@ python 3
 
 [ganache-cli](https://github.com/trufflesuite/ganache-cli)
 
+
+-----------------------
+
+## new
+
+by reed 2020.8.19
+
+npm install  
+
+npm run delopy # generate some new contract in deployments directory
+
