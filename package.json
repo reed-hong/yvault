@@ -12,7 +12,7 @@
   "devDependencies": {},
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "flat": "scripts/flat.sh"
+    "deploy": "scripts/deploy.sh"
   },
   "repository": {
     "type": "git",
