@@ -1,0 +1,27 @@
+{
+  "name": "yvault",
+  "version": "1.0.0",
+  "description": "solc 0.5.15",
+  "main": "truffle-config.js",
+  "dependencies": {
+    "@openzeppelin/contracts": "^2.4.0",
+    "truffle": "^5.0.43",
+    "solc": "^0.5.12",
+    "truffle-flattener": "^1.3.0"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "deploy": "scripts/deploy.sh"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/reed-hong/yvault.git"
+  },
+  "author": "reedhong",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/reed-hong/yvault/issues"
+  },
+  "homepage": "https://github.com/reed-hong/yvault#readme"
+}
