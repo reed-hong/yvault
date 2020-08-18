@@ -57,24 +57,35 @@ contract StrategyDForceUSDC {
     address constant public uni = address(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
     address constant public weth = address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2); // used for df <> weth <> usdc route
     
-    uint public fee = 100;
-    uint public callfee = 100;
-    uint constant public max = 10000;
+    uint public performanceFee = 5000;
+    uint constant public performanceMax = 10000;
+    
+    uint public withdrawalFee = 500;
+    uint constant public withdrawalMax = 10000;
     
     address public governance;
     address public controller;
-    
-    address  public want;
-    
+    address public strategist;
     
     constructor(address _controller) public {
-        governance = tx.origin;
+        governance = msg.sender;
+        strategist = msg.sender;
         controller = _controller;
-        want = 0xdF5e0e81Dff6FAF3A7e52BA697820c5e32D806A8;//ycrv
-        init();    
     }
-    function getName() external pure returns (string memory) {
-        return "StrategyDForceUSDC";
+    
+    function setStrategist(address _strategist) external {
+        require(msg.sender == governance, "!governance");
+        strategist = _strategist;
+    }
+    
+    function setWithdrawalFee(uint _withdrawalFee) external {
+        require(msg.sender == governance, "!governance");
+        withdrawalFee = _withdrawalFee;
+    }
+    
+    function setPerformanceFee(uint _performanceFee) external {
+        require(msg.sender == governance, "!governance");
+        performanceFee = _performanceFee;
     }
     
     function deposit() public {
@@ -112,10 +123,10 @@ contract StrategyDForceUSDC {
             _amount = _amount.add(_balance);
         }
         
-        //uint _fee = _amount.mul(withdrawalFee).div(withdrawalMax);
+        uint _fee = _amount.mul(withdrawalFee).div(withdrawalMax);
         
         
-        //IERC20(want).safeTransfer(IController(controller).rewards(), _fee);
+        IERC20(want).safeTransfer(IController(controller).rewards(), _fee);
         address _vault = IController(controller).vaults(address(want));
         require(_vault != address(0), "!vault"); // additional protection so we don't burn the funds
         
