@@ -1,6 +1,6 @@
 pragma solidity ^0.5.0;
 
-contract Balancer {
+contract IBalancer {
     function swapExactAmountIn(
         address tokenIn,
         uint tokenAmountIn,
