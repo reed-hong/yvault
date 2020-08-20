@@ -6,15 +6,16 @@
 
 pragma solidity ^0.5.5;
 
-import '@openzeppelin/contracts/token/ERC20/ERC20.sol';
-import '@openzeppelin/contracts/token/ERC20/ERC20Detailed.sol';
-import '@openzeppelin/contracts/token/ERC20/SafeERC20.sol';
-import '@openzeppelin/contracts/token/ERC20/IERC20.sol';
 import '@openzeppelin/contracts/math/SafeMath.sol';
 import '@openzeppelin/contracts/utils/Address.sol';
 
-import '../interface/IUni.sol';
+import '../interface/IUniswapRouter.sol';
 import '../interface/IController.sol';
+import '../interface/IVault.sol';
+import '../interface/IPool.sol';
+import '../interface/IERC20.sol';
+import '../library/SafeERC20.sol';
+
 /*
 
  A strategy must implement the following calls;
@@ -29,15 +30,9 @@ import '../interface/IController.sol';
  
 */
 
-interface dRewards {
-    function withdraw(uint) external;
-    function getReward() external;
-    function stake(uint) external;
-    function balanceOf(address) external view returns (uint);
-    function exit() external;
-}
 
-interface dERC20 {
+// convet ycurv ,dai,usdt,... to dusdc， 传入dusdc的token地址
+interface dConvert {
   function mint(address, uint256) external;
   function redeem(address, uint) external;
   function getTokenBalance(address) external view returns (uint);
@@ -50,46 +45,73 @@ contract StrategyDForceUSDC {
     using Address for address;
     using SafeMath for uint256;
     
-    address constant public want = address(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48); // USDC
-    address constant public dusdc = address(0x16c9cF62d8daC4a38FB50Ae5fa5d51E9170F3179);
-    address constant public pool = address(0xB71dEFDd6240c45746EC58314a01dd6D833fD3b5);
-    address constant public df = address(0x431ad2ff6a9C365805eBaD47Ee021148d6f7DBe0);
-    address constant public uni = address(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
-    address constant public weth = address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2); // used for df <> weth <> usdc route
+    address public pool;
+    address public output;
+    string public getName;
     
-    uint public fee = 100;
+    //ddress constant public want = address(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48); // USDC
+    //address constant public pool = address(0xB71dEFDd6240c45746EC58314a01dd6D833fD3b5); // deforce
+    address constant public dusdc = address(0x16c9cF62d8daC4a38FB50Ae5fa5d51E9170F3179);
+    //address constant publict df = address(0x431ad2ff6a9C365805eBaD47Ee021148d6f7DBe0);  // outpu
+    address constant public unirouter = address(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
+    address constant public weth = address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2); // used for df <> weth <> usdc route
+    address constant public yfii = address(0xa1d0E215a23d7030842FC67cE582a6aFa3CCaB83);
+    
+    
+    uint public fee = 600;
+    uint public burnfee = 300;
     uint public callfee = 100;
     uint constant public max = 10000;
     
     address public governance;
     address public controller;
-    
+
     address  public want;
     
+    address[] public swapRouting;
     
-    constructor(address _controller) public {
+    /*
+     * @_output: df erc20 address 
+     * @_pool: 
+     * @_want: in [ycrv,dai, trueusd, dusdc, USDT ] 
+     */
+
+    constructor(address _output,address _pool,address _want) public {
         governance = tx.origin;
-        controller = _controller;
-        want = 0xdF5e0e81Dff6FAF3A7e52BA697820c5e32D806A8;//ycrv
-        init();    
+        controller = 0xe14e60d0F7fb15b1A98FDE88A3415C17b023bf36;
+        output = _output;
+        pool = _pool;
+        want = _want;
+        getName = string(
+            abi.encodePacked("yfii:Strategy:", 
+                abi.encodePacked(IERC20(want).name(),
+                    abi.encodePacked(":",IERC20(output).name())
+                )
+            ));
+        init(); 
+        swapRouting = [output,weth,yfii];
+
     }
-    function getName() external pure returns (string memory) {
-        return "StrategyDForceUSDC";
+    
+    function init () public{
+        IERC20(output).safeApprove(unirouter, uint(-1));
     }
+    
     
     function deposit() public {
-        uint _want = IERC20(want).balanceOf(address(this));
-        if (_want > 0) {
+        uint _wantBalance = IERC20(want).balanceOf(address(this));
+        if (_wantBalance > 0 && want != dusdc ) {  // use stable coin mint usdc
             IERC20(want).safeApprove(dusdc, 0);
-            IERC20(want).safeApprove(dusdc, _want);
-            dERC20(dusdc).mint(address(this), _want);
+            IERC20(want).safeApprove(dusdc, _wantBalance);
+            dConvert(dusdc).mint(address(this), _wantBalance);
         }
         
-        uint _dusdc = IERC20(dusdc).balanceOf(address(this));
-        if (_dusdc > 0) {
+        uint _dusdcBalance = IERC20(dusdc).balanceOf(address(this));
+
+        if (_dusdcBalance > 0) {
             IERC20(dusdc).safeApprove(pool, 0);
-            IERC20(dusdc).safeApprove(pool, _dusdc);
-            dRewards(pool).stake(_dusdc);
+            IERC20(dusdc).safeApprove(pool, _dusdcBalance);
+            IPool(pool).stake(_dusdcBalance);
         }
         
     }
@@ -112,19 +134,15 @@ contract StrategyDForceUSDC {
             _amount = _amount.add(_balance);
         }
         
-        //uint _fee = _amount.mul(withdrawalFee).div(withdrawalMax);
-        
-        
-        //IERC20(want).safeTransfer(IController(controller).rewards(), _fee);
         address _vault = IController(controller).vaults(address(want));
         require(_vault != address(0), "!vault"); // additional protection so we don't burn the funds
         
-        IERC20(want).safeTransfer(_vault, _amount.sub(_fee));
+        IERC20(want).safeTransfer(_vault, _amount);
     }
     
     // Withdraw all funds, normally used when migrating strategies
-    function withdrawAll() external returns (uint balance) {
-        require(msg.sender == controller, "!controller");
+    function withdrawAll() public returns (uint balance) { 
+        require(msg.sender == controller||msg.sender==governance, "!controller");
         _withdrawAll();
         
         
@@ -136,44 +154,75 @@ contract StrategyDForceUSDC {
     }
     
     function _withdrawAll() internal {
-        dRewards(pool).exit();
+        IPool(pool).exit();
         uint _dusdc = IERC20(dusdc).balanceOf(address(this));
-        if (_dusdc > 0) {
-            dERC20(dusdc).redeem(address(this),_dusdc);
+
+        //  如果不是usdc就，就可以取回来
+        if (_dusdc > 0 && want != dusdc ) { 
+            dConvert(dusdc).redeem(address(this),_dusdc);
         }
     }
     
+    function setNewPool(address _output,address _pool) public{
+        require(msg.sender == governance, "!governance");
+        //这边是切换池子以及挖到的代币
+        //先退出之前的池子.
+        harvest();
+        withdrawAll();
+        output = _output;
+        pool = _pool;
+        getName = string(
+            abi.encodePacked("yfii:Strategy:", 
+                abi.encodePacked(IERC20(want).name(),
+                    abi.encodePacked(":",IERC20(output).name())
+                )
+            ));
+
+    }
+    
+    
     function harvest() public {
-        require(msg.sender == strategist || msg.sender == governance, "!authorized");
-        dRewards(pool).getReward();
-        uint _df = IERC20(df).balanceOf(address(this));
-        if (_df > 0) {
-            IERC20(df).safeApprove(uni, 0);
-            IERC20(df).safeApprove(uni, _df);
-            
-            address[] memory path = new address[](3);
-            path[0] = df;
-            path[1] = weth;
-            path[2] = want;
-            
-            IUni(uni).swapExactTokensForTokens(_df, uint(0), path, address(this), now.add(1800));
-        }
-        uint _want = IERC20(want).balanceOf(address(this));
-        if (_want > 0) {
-            uint _fee = _want.mul(performanceFee).div(performanceMax);
-            IERC20(want).safeTransfer(IController(controller).rewards(), _fee);
-            deposit();
+        require(!Address.isContract(msg.sender),"!contract");
+        IPool(pool).getReward(); 
+        address _vault = IController(controller).vaults(address(want));
+        require(_vault != address(0), "!vault"); // additional protection so we don't burn the funds
+
+        uint outputBalance = IERC20(output).balanceOf(address(this));
+        if (outputBalance > 0) {
+  
+            IUniswapRouter(unirouter).swapExactTokensForTokens(IERC20(output).balanceOf(address(this)), 0, swapRouting, address(this), now.add(1800));
+
+            // fee
+            uint b = IERC20(yfii).balanceOf(address(this));
+            uint _fee = b.mul(fee).div(max);
+            uint _callfee = b.mul(callfee).div(max);
+            uint _burnfee = b.mul(burnfee).div(max);
+            IERC20(yfii).safeTransfer(IController(controller).rewards(), _fee); //6%  5% team +1% insurance
+            IERC20(yfii).safeTransfer(msg.sender, _callfee); //call fee 1%
+            IERC20(yfii).safeTransfer(address(0x6666666666666666666666666666666666666666), _burnfee); //burn fee 3%
+
+            //把yfii 存进去分红.
+            IERC20(yfii).safeApprove(_vault, 0);
+            IERC20(yfii).safeApprove(_vault, IERC20(yfii).balanceOf(address(this)));
+            IVault(_vault).make_profit(IERC20(yfii).balanceOf(address(this)));
         }
     }
     
     function _withdrawSome(uint256 _amount) internal returns (uint) {
-        uint _dusdc = _amount.mul(1e18).div(dERC20(dusdc).getExchangeRate());
+        uint _dusdc = _amount.mul(1e18).div(dConvert(dusdc).getExchangeRate());
         uint _before = IERC20(dusdc).balanceOf(address(this));
-        dRewards(pool).withdraw(_dusdc);
+        IPool(pool).withdraw(_dusdc);
         uint _after = IERC20(dusdc).balanceOf(address(this));
         uint _withdrew = _after.sub(_before);
         _before = IERC20(want).balanceOf(address(this));
-        dERC20(dusdc).redeem(address(this), _withdrew);
+
+        //  如果不是usdc就，就可以取回来
+        if ( want != dusdc ) { 
+            dConvert(dusdc).redeem(address(this), _withdrew);
+        }
+
+
+
         _after = IERC20(want).balanceOf(address(this));
         _withdrew = _after.sub(_before);
         return _withdrew;
@@ -184,15 +233,15 @@ contract StrategyDForceUSDC {
     }
     
     function balanceOfPool() public view returns (uint) {
-        return (dRewards(pool).balanceOf(address(this))).mul(dERC20(dusdc).getExchangeRate()).div(1e18);
+        return (IPool(pool).balanceOf(address(this))).mul(dConvert(dusdc).getExchangeRate()).div(1e18);
     }
     
     function getExchangeRate() public view returns (uint) {
-        return dERC20(dusdc).getExchangeRate();
+        return dConvert(dusdc).getExchangeRate();
     }
     
     function balanceOfDUSDC() public view returns (uint) {
-        return dERC20(dusdc).getTokenBalance(address(this));
+        return dConvert(dusdc).getTokenBalance(address(this));
     }
     
     function balanceOf() public view returns (uint) {
@@ -200,6 +249,10 @@ contract StrategyDForceUSDC {
                .add(balanceOfDUSDC())
                .add(balanceOfPool());
     }
+    
+    function balanceOfPendingReward() public view returns(uint){ //还没有领取的收益有多少...
+        return IPool(pool).earned(address(this));
+	}
     
     function setGovernance(address _governance) external {
         require(msg.sender == governance, "!governance");
@@ -209,5 +262,22 @@ contract StrategyDForceUSDC {
     function setController(address _controller) external {
         require(msg.sender == governance, "!governance");
         controller = _controller;
+    }
+
+    function setFee(uint256 _fee) external{
+        require(msg.sender == governance, "!governance");
+        fee = _fee;
+    }
+    function setCallFee(uint256 _fee) external{
+        require(msg.sender == governance, "!governance");
+        callfee = _fee;
+    }    
+    function setBurnFee(uint256 _fee) external{
+        require(msg.sender == governance, "!governance");
+        burnfee = _fee;
+    }
+    function setSwapRouting(address[] memory _path) public{
+        require(msg.sender == governance, "!governance");
+        swapRouting = _path;
     }
 }
