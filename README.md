@@ -22,5 +22,7 @@ by reed 2020.8.19
 
 npm install  
 
-npm run delopy # generate some new contract in deployments directory
+npm run flat # generate full contract in deployments directory
+
+truffle compile # compile contract
 
