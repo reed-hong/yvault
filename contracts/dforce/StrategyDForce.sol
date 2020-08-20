@@ -31,8 +31,8 @@ import '../library/SafeERC20.sol';
 */
 
 
-// convet ycurv ,dai,usdt,... to dusdc， 传入dusdc的token地址
-interface dConvert {
+// convet ycurv ,dai,usdt,... to dtoken， 传入dtoken的token地址
+interface dTokenConvert {
   function mint(address, uint256) external;
   function redeem(address, uint) external;
   function getTokenBalance(address) external view returns (uint);
@@ -40,19 +40,28 @@ interface dConvert {
 }
 
 
-contract StrategyDForceUSDC {
+/*
+ * forked from https://etherscan.io/address/0x01b354a9fb34760455ee9cbe7d71d2ce5c11ab5c#code
+ */
+contract StrategyDForce {
     using SafeERC20 for IERC20;
     using Address for address;
     using SafeMath for uint256;
     
     address public pool;
+    address public dtoken;
     address public output;
     string public getName;
     
-    //ddress constant public want = address(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48); // USDC
-    //address constant public pool = address(0xB71dEFDd6240c45746EC58314a01dd6D833fD3b5); // deforce
-    address constant public dusdc = address(0x16c9cF62d8daC4a38FB50Ae5fa5d51E9170F3179);
-    //address constant publict df = address(0x431ad2ff6a9C365805eBaD47Ee021148d6f7DBe0);  // outpu
+
+    address constant public df = address(0x431ad2ff6a9C365805eBaD47Ee021148d6f7DBe0);  
+
+    // vault
+
+    address constant public dai = address(0x6B175474E89094C44Da98b954EedeAC495271d0F);
+    address constant public usdt = address(0xdAC17F958D2ee523a2206206994597C13D831ec7);
+    address constant public usdc = address(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
+
     address constant public unirouter = address(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
     address constant public weth = address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2); // used for df <> weth <> usdc route
     address constant public yfii = address(0xa1d0E215a23d7030842FC67cE582a6aFa3CCaB83);
@@ -69,18 +78,22 @@ contract StrategyDForceUSDC {
     address  public want;
     
     address[] public swapRouting;
-    
+
+
+    mapping(address => address) public dTokens;
+    mapping(address => address) public dPools;
+
     /*
      * @_output: df erc20 address 
-     * @_pool: 
-     * @_want: in [ycrv,dai, trueusd, dusdc, USDT ] 
+     * @_pool: dforce pool
+     * @_want: in [dai, dtoken, usdt ] 
      */
 
-    constructor(address _output,address _pool,address _want) public {
+    constructor(address _output,address _want) public {
         governance = tx.origin;
         controller = 0xe14e60d0F7fb15b1A98FDE88A3415C17b023bf36;
         output = _output;
-        pool = _pool;
+        //pool = _pool;
         want = _want;
         getName = string(
             abi.encodePacked("yfii:Strategy:", 
@@ -95,23 +108,36 @@ contract StrategyDForceUSDC {
     
     function init () public{
         IERC20(output).safeApprove(unirouter, uint(-1));
+
+        dTokens[dai] = address(0x02285AcaafEB533e03A7306C55EC031297df9224);
+        dTokens[usdt] = address(0x868277d475E0e475E38EC5CdA2d9C83B5E1D9fc8);
+        dTokens[usdc] = address(0x16c9cF62d8daC4a38FB50Ae5fa5d51E9170F3179);
+        dtoken = dTokens[want];
+        require(dtoken != address(0x0), "error want address");
+
+        dPools[dai] = address(0xD2fA07cD6Cd4A5A96aa86BacfA6E50bB3aaDBA8B);
+        dPools[usdt] = address(0x324EebDAa45829c6A8eE903aFBc7B61AF48538df);
+        dPools[usdc] = address(0xB71dEFDd6240c45746EC58314a01dd6D833fD3b5);
+        pool = dPools[want];
+
+        require(pool != address(0x0), "error want address");
     }
     
     
     function deposit() public {
         uint _wantBalance = IERC20(want).balanceOf(address(this));
-        if (_wantBalance > 0 && want != dusdc ) {  // use stable coin mint usdc
-            IERC20(want).safeApprove(dusdc, 0);
-            IERC20(want).safeApprove(dusdc, _wantBalance);
-            dConvert(dusdc).mint(address(this), _wantBalance);
+        if (_wantBalance > 0) {  // use stable coin mint usdc
+            IERC20(want).safeApprove(dtoken, 0);
+            IERC20(want).safeApprove(dtoken, _wantBalance);
+            dTokenConvert(dtoken).mint(address(this), _wantBalance);
         }
         
-        uint _dusdcBalance = IERC20(dusdc).balanceOf(address(this));
+        uint _dtokenBalance = IERC20(dtoken).balanceOf(address(this));
 
-        if (_dusdcBalance > 0) {
-            IERC20(dusdc).safeApprove(pool, 0);
-            IERC20(dusdc).safeApprove(pool, _dusdcBalance);
-            IPool(pool).stake(_dusdcBalance);
+        if (_dtokenBalance > 0) {
+            IERC20(dtoken).safeApprove(pool, 0);
+            IERC20(dtoken).safeApprove(pool, _dtokenBalance);
+            IPool(pool).stake(_dtokenBalance);
         }
         
     }
@@ -120,7 +146,7 @@ contract StrategyDForceUSDC {
     function withdraw(IERC20 _asset) external returns (uint balance) {
         require(msg.sender == controller, "!controller");
         require(want != address(_asset), "want");
-        require(dusdc != address(_asset), "dusdc");
+        require(dtoken != address(_asset), "dtoken");
         balance = _asset.balanceOf(address(this));
         _asset.safeTransfer(controller, balance);
     }
@@ -155,11 +181,11 @@ contract StrategyDForceUSDC {
     
     function _withdrawAll() internal {
         IPool(pool).exit();
-        uint _dusdc = IERC20(dusdc).balanceOf(address(this));
+        uint _dtoken = IERC20(dtoken).balanceOf(address(this));
 
         //  如果不是usdc就，就可以取回来
-        if (_dusdc > 0 && want != dusdc ) { 
-            dConvert(dusdc).redeem(address(this),_dusdc);
+        if (_dtoken > 0 && want != dtoken ) { 
+            dTokenConvert(dtoken).redeem(address(this),_dtoken);
         }
     }
     
@@ -209,16 +235,16 @@ contract StrategyDForceUSDC {
     }
     
     function _withdrawSome(uint256 _amount) internal returns (uint) {
-        uint _dusdc = _amount.mul(1e18).div(dConvert(dusdc).getExchangeRate());
-        uint _before = IERC20(dusdc).balanceOf(address(this));
-        IPool(pool).withdraw(_dusdc);
-        uint _after = IERC20(dusdc).balanceOf(address(this));
+        uint _dtoken = _amount.mul(1e18).div(dTokenConvert(dtoken).getExchangeRate());
+        uint _before = IERC20(dtoken).balanceOf(address(this));
+        IPool(pool).withdraw(_dtoken);
+        uint _after = IERC20(dtoken).balanceOf(address(this));
         uint _withdrew = _after.sub(_before);
         _before = IERC20(want).balanceOf(address(this));
 
         //  如果不是usdc就，就可以取回来
-        if ( want != dusdc ) { 
-            dConvert(dusdc).redeem(address(this), _withdrew);
+        if ( want != dtoken ) { 
+            dTokenConvert(dtoken).redeem(address(this), _withdrew);
         }
 
 
@@ -233,15 +259,15 @@ contract StrategyDForceUSDC {
     }
     
     function balanceOfPool() public view returns (uint) {
-        return (IPool(pool).balanceOf(address(this))).mul(dConvert(dusdc).getExchangeRate()).div(1e18);
+        return (IPool(pool).balanceOf(address(this))).mul(dTokenConvert(dtoken).getExchangeRate()).div(1e18);
     }
     
     function getExchangeRate() public view returns (uint) {
-        return dConvert(dusdc).getExchangeRate();
+        return dTokenConvert(dtoken).getExchangeRate();
     }
     
     function balanceOfDUSDC() public view returns (uint) {
-        return dConvert(dusdc).getTokenBalance(address(this));
+        return dTokenConvert(dtoken).getTokenBalance(address(this));
     }
     
     function balanceOf() public view returns (uint) {
